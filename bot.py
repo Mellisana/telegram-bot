@@ -3,21 +3,16 @@ import random
 import logging
 import sqlite3
 import datetime
-from datetime import timedelta
+import aiohttp
+import asyncio
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext
 
 # Загружаем токен из файла
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-
-# НАСТРОЙКИ БОТА
-BOT_CONFIG = {
-    'users_to_select': 3,      # Сколько человек выбирать (1, 2, 3...)
-    'joke_before_tag': True,   # True = шутка потом пользователь, False = пользователь потом шутка
-    'show_stats': True         # Показывать статистику при выборе
-}
 
 # Настройка логирования
 logging.basicConfig(
@@ -26,209 +21,531 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Список перед именем
+# Гейские подколы для пидора дня
 GAY_JOKES = [
     "Почему геи не боятся привидений? Потому что они уже видели выходцы из шкафов!",
+    "Что сказал один пидор другому? 'Давай останемся друзьями!'",
+    "Как пидоры называют свой выходной? - День открытых дверей!",
+    "Почему пидоры хорошие программисты? Потому что они любят обрабатывать исключения!",
+    "Что общего между пидором и пиццей? Оба любят, когда их укладывают на стол!",
 ]
 
-# Фразы на триггер "пиздец"
-PIZDEC_PHRASES = [
-    "Да уж, это действительно пиздец...",
-    "Пиздец? Это только начало!",
+# Предсказания для дня тестировщика
+TESTER_DAY_PREDICTIONS = [
+    "🔮 Сегодня все баги сами пофиксятся!",
+    "🌙 Автотесты пройдут с первого раза!",
+    "⭐ Найдешь баг, который все искали годами!",
+    "💖 Все ошибки поправятся магическим образом!",
+    "🏆 Облако не будет лагать целый день!",
+    "🎉 День без значительных ошибок!",
+    "🌅 Все тесты пройдут успешно!",
+    "💰 Релиз будет вовремя!",
+    "🔧 Всё магически само заработает!",
+    "📊 Ничего не будет падать неделю!",
 ]
 
-# Предсказания Таро для тестировщиков
-TARO = [
-    "✨ Карта Солнце: Сегодня все баги сами пофиксятся",
-    "🌙 Карта Луна: Автотесты пройдут",
-    "⭐ Карта Звезда: Найдешь баг, который все искали годами",
-    "💖 Карта Влюбленные: Все ошибки поправятся с первого раза",
-    "🏆 Карта Сила: Облако не ебланит",
-    "🎉 Карта Колесо Фортуны: День без значительных ошибок",
-    "🌅 Карта Мир: Все тесты упали по ошибкам в самих тестах",
-    "💰 Карта Император: Релиз будет вовремя",
-    "🔧 Карта Маг: Все магически само заработает",
-    "📊 Карта Правосудие: Ничего не будет ВОСить неделю",
-    "☠️ Карта Смерть: Ошибка с боя",
-    "🔥 Карта Башня: Весь день будут значительные ошибки ",
-    "👻 Карта Отшельник: Застрянешь на одном баге на 8 часов",
-    "💀 Карта Дьявол: Все будет разъебано по проекту",
-    "🌪️ Карта Суд: С логами не повторишь Ашибку",
-    "⛈️ Карта Повешенный: будешь искать макет пол дня",
-    "🕷️ Карта Императрица: 'срочная' фича!",
+# Грубые ответы для триггеров
+RUDE_RESPONSES = [
+    "Да иди ты нахуй со своими проблемами!",
+    "Опять эта хуйня? Решай свои ебаные проблемы сам!",
+    "Пиздец конечно, но мне похуй!",
+    "Ну вот опять этот пиздец начался...",
+    "Заебали уже со своим пиздецом!",
+    "Это твои ебаные проблемы, а не мои!",
+    "Иди нахуй, я занят более важной хуйней!",
+    "Пиздец как всё заебало!",
+    "Решай свои ебаные ошибки сам, долбаёб!",
+    "Опять этот хуевый пиздец..."
 ]
 
-# Мемы на "Ошибка" для IT
-ERROR_MEMES = [
-    "У меня не повторяется",
-    "Это не ошибка, это undocumented feature!",
-    "Ошибка - это когда expected != actual, а в жизни expected != expected",
-    "Мой код работает? Не знаю, я его не тестировал 🤷‍♂️",
-    "Всё работает! (на моей машине работает)",
-    "Это не баг, это фича!",
-]
+# ТИТУЛЫ ДЛЯ ЕЖЕДНЕВНОГО ВЫБОРА
+TITLES = {
+    'pidor': {
+        'title': '🏆 Пидор Дня',
+        'description': 'Самый везучий неудачник чата!',
+        'emoji': '🏆'
+    },
+    'favorite': {
+        'title': '💖 Любимчик Дня', 
+        'description': 'Чьи сообщения собрали больше всего реакций!',
+        'emoji': '💖'
+    },
+}
 
 # База данных
 def init_db():
-    conn = sqlite3.connect('bot_stats.db')
+    conn = sqlite3.connect('daily_titles.db')
     cursor = conn.cursor()
+    
+    # Таблица для ежедневных результатов
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS daily_results (
+        date TEXT PRIMARY KEY,
+        results TEXT,
+        last_updated TEXT
+    )
+    ''')
+    
+    # Таблица для статистики пользователей
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS user_stats (
-        user_id INTEGER PRIMARY KEY,
+        user_id INTEGER,
         username TEXT,
         first_name TEXT,
         last_name TEXT,
-        count_day INTEGER DEFAULT 0,
-        count_week INTEGER DEFAULT 0,
-        count_total INTEGER DEFAULT 0,
-        last_selected_date TEXT
+        title_type TEXT,
+        count INTEGER DEFAULT 0,
+        last_awarded TEXT,
+        PRIMARY KEY (user_id, title_type)
     )
     ''')
-    conn.commit()
-    conn.close()
-
-def update_user_stats(user_id, username, first_name, last_name):
-    conn = sqlite3.connect('bot_stats.db')
-    cursor = conn.cursor()
-    today = datetime.date.today().isoformat()
     
-    cursor.execute('SELECT * FROM user_stats WHERE user_id = ?', (user_id,))
-    user = cursor.fetchone()
+    # Таблица для отслеживания реакций
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS message_reactions (
+        message_id INTEGER PRIMARY KEY,
+        user_id INTEGER,
+        username TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        reactions_count INTEGER DEFAULT 0,
+        date TEXT
+    )
+    ''')
     
-    if user:
-        cursor.execute('''
-            UPDATE user_stats 
-            SET count_total = count_total + 1,
-                username = ?, first_name = ?, last_name = ?,
-                last_selected_date = ?
-            WHERE user_id = ?
-        ''', (username, first_name, last_name, today, user_id))
-    else:
-        cursor.execute('''
-            INSERT INTO user_stats (user_id, username, first_name, last_name, count_total, last_selected_date)
-            VALUES (?, ?, ?, ?, 1, ?)
-        ''', (user_id, username, first_name, last_name, today))
+    # Таблица для отслеживания предсказаний тестировщика
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS tester_predictions (
+        user_id INTEGER PRIMARY KEY,
+        last_prediction_date TEXT
+    )
+    ''')
     
     conn.commit()
     conn.close()
 
-def get_user_stats(user_id):
-    conn = sqlite3.connect('bot_stats.db')
+def get_today_results():
+    today = datetime.now().date().isoformat()
+    conn = sqlite3.connect('daily_titles.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT count_total FROM user_stats WHERE user_id = ?', (user_id,))
+    
+    cursor.execute('SELECT results FROM daily_results WHERE date = ?', (today,))
     result = cursor.fetchone()
     conn.close()
-    return result[0] if result else 0
+    
+    return result[0] if result else None
 
-# Команда /rainbow
-async def rainbow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def save_today_results(results):
+    today = datetime.now().date().isoformat()
+    now = datetime.now().isoformat()
+    
+    conn = sqlite3.connect('daily_titles.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        INSERT OR REPLACE INTO daily_results (date, results, last_updated)
+        VALUES (?, ?, ?)
+    ''', (today, results, now))
+    
+    conn.commit()
+    conn.close()
+
+def update_user_stats(user_id, username, first_name, last_name, title_type):
+    today = datetime.now().date().isoformat()
+    
+    conn = sqlite3.connect('daily_titles.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        INSERT OR REPLACE INTO user_stats 
+        (user_id, username, first_name, last_name, title_type, count, last_awarded)
+        VALUES (?, ?, ?, ?, ?, COALESCE((SELECT count FROM user_stats WHERE user_id = ? AND title_type = ?), 0) + 1, ?)
+    ''', (user_id, username, first_name, last_name, title_type, user_id, title_type, today))
+    
+    conn.commit()
+    conn.close()
+
+def get_user_stats_period(title_type, period_days):
+    """Получает статистику за определенный период"""
+    conn = sqlite3.connect('daily_titles.db')
+    cursor = conn.cursor()
+    
+    start_date = (datetime.now() - timedelta(days=period_days)).date().isoformat()
+    
+    cursor.execute('''
+        SELECT username, first_name, last_name, COUNT(*) as count
+        FROM user_stats 
+        WHERE title_type = ? AND last_awarded >= ?
+        GROUP BY user_id 
+        ORDER BY count DESC 
+        LIMIT 10
+    ''', (title_type, start_date))
+    
+    stats = cursor.fetchall()
+    conn.close()
+    
+    return stats
+
+def get_all_time_stats(title_type):
+    """Получает статистику за все время"""
+    conn = sqlite3.connect('daily_titles.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT username, first_name, last_name, COUNT(*) as count
+        FROM user_stats 
+        WHERE title_type = ?
+        GROUP BY user_id 
+        ORDER BY count DESC 
+        LIMIT 10
+    ''', (title_type,))
+    
+    stats = cursor.fetchall()
+    conn.close()
+    
+    return stats
+
+def get_random_users(chat_members, count=1):
+    """Выбирает случайных пользователей из списка"""
+    human_members = [m for m in chat_members if not m.user.is_bot]
+    return random.sample(human_members, min(count, len(human_members)))
+
+def get_top_user_by_reactions():
+    """Получает пользователя с наибольшим количеством реакций"""
+    conn = sqlite3.connect('daily_titles.db')
+    cursor = conn.cursor()
+    
+    # Получаем пользователя с максимальным количеством реакций за сегодня
+    today = datetime.now().date().isoformat()
+    cursor.execute('''
+        SELECT user_id, username, first_name, last_name, SUM(reactions_count) as total_reactions
+        FROM message_reactions 
+        WHERE date = ?
+        GROUP BY user_id 
+        ORDER BY total_reactions DESC 
+        LIMIT 1
+    ''', (today,))
+    
+    result = cursor.fetchone()
+    conn.close()
+    
+    return result
+
+def can_user_get_prediction(user_id):
+    """Проверяет, может ли пользователь получить предсказание сегодня"""
+    today = datetime.now().date().isoformat()
+    conn = sqlite3.connect('daily_titles.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT last_prediction_date FROM tester_predictions WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    
+    if result and result[0] == today:
+        conn.close()
+        return False
+    
+    cursor.execute('''
+        INSERT OR REPLACE INTO tester_predictions (user_id, last_prediction_date)
+        VALUES (?, ?)
+    ''', (user_id, today))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+async def save_message_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняет информацию о сообщении и его реакциях"""
     try:
-        chat_id = update.effective_chat.id
-        members = await context.bot.get_chat_administrators(chat_id)
-        human_members = [m for m in members if not m.user.is_bot]
+        message = update.message
+        user = message.from_user
         
-        if not human_members:
-            await update.message.reply_text("Не могу найти участников для выбора!")
-            return
+        # Подсчитываем общее количество реакций
+        reaction_count = 0
+        if message.reactions:
+            for reaction in message.reactions:
+                reaction_count += reaction.count
         
-        # Выбираем несколько пользователей согласно настройкам
-        selected_members = random.sample(human_members, min(BOT_CONFIG['users_to_select'], len(human_members)))
+        conn = sqlite3.connect('daily_titles.db')
+        cursor = conn.cursor()
         
-        response = ""
+        cursor.execute('''
+            INSERT OR REPLACE INTO message_reactions 
+            (message_id, user_id, username, first_name, last_name, reactions_count, date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            message.message_id, 
+            user.id, 
+            user.username, 
+            user.first_name, 
+            user.last_name,
+            reaction_count,
+            datetime.now().date().isoformat()
+        ))
         
-        # Сначала шутка, потом пользователи
-        if BOT_CONFIG['joke_before_tag']:
-            joke = random.choice(GAY_JOKES)
-            response += f"{joke}\n\n"
-            
-            for member in selected_members:
-                user = member.user
-                update_user_stats(user.id, user.username, user.first_name, user.last_name)
-                user_name = f"{user.first_name}"
-                if user.last_name:
-                    user_name += f" {user.last_name}"
-                if user.username:
-                    user_name += f" (@{user.username})"
-                response += f"🎲 {user_name}\n"
-        
-        # Сначала пользователи, потом шутка
-        else:
-            for member in selected_members:
-                user = member.user
-                update_user_stats(user.id, user.username, user.first_name, user.last_name)
-                user_name = f"{user.first_name}"
-                if user.last_name:
-                    user_name += f" {user.last_name}"
-                if user.username:
-                    user_name += f" (@{user.username})"
-                response += f"🎲 {user_name}\n"
-            
-            joke = random.choice(GAY_JOKES)
-            response += f"\n{joke}"
-        
-        # Добавляем статистику если включено
-        if BOT_CONFIG['show_stats']:
-            for member in selected_members:
-                user = member.user
-                stats = get_user_stats(user.id)
-                response += f"\n📊 {user.first_name} выбирали: {stats} раз(а)"
-        
-        await update.message.reply_text(response)
+        conn.commit()
+        conn.close()
         
     except Exception as e:
-        logger.error(f"Error in rainbow_command: {e}")
-        await update.message.reply_text("Произошла ошибка при выполнении команды!")
+        logger.error(f"Error saving message reaction: {e}")
 
-# Команда /stats
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def assign_daily_titles(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Основная функция назначения ежедневных титулов"""
     try:
-        user_id = update.effective_user.id
-        total = get_user_stats(user_id)
+        chat_id = update.effective_chat.id
         
-        response = f"📊 Ваша статистика:\nЗа все время: {total} раз(а)"
+        # Проверяем, не выполнялась ли сегодня уже этой команды
+        today_results = get_today_results()
+        if today_results:
+            await update.message.reply_text("📅 Сегодняшние титулы уже были назначены!\n\n" + today_results)
+            return
         
-        await update.message.reply_text(response)
+        # Получаем участников чата
+        members = await context.bot.get_chat_administrators(chat_id)
+        
+        # 1. Отправляем гейскую шутку
+        gay_joke = random.choice(GAY_JOKES)
+        await update.message.reply_text(gay_joke)
+        
+        # 2. Отправляем картинку барабана (эмодзи)
+        await update.message.reply_text("🥁 *Барабанная дробь...* 🥁", parse_mode='Markdown')
+        
+        # 3. Выбираем пидора дня
+        pidor_users = get_random_users(members, 1)
+        pidor_user = pidor_users[0].user
+        
+        # 4. Выбираем любимчика дня (по реакциям)
+        favorite_user_data = get_top_user_by_reactions()
+        
+        # Если нет данных о реакциях, выбираем случайного
+        if not favorite_user_data:
+            favorite_users = get_random_users(members, 1)
+            favorite_user = favorite_users[0].user
+            favorite_name = f"{favorite_user.first_name or ''}"
+            if favorite_user.last_name:
+                favorite_name += f" {favorite_user.last_name}"
+            if favorite_user.username:
+                favorite_name += f" (@{favorite_user.username})"
+        else:
+            user_id, username, first_name, last_name, total_reactions = favorite_user_data
+            favorite_name = f"{first_name or ''}"
+            if last_name:
+                favorite_name += f" {last_name}"
+            if username:
+                favorite_name += f" (@{username})"
+            favorite_name += f" - {total_reactions} реакций"
+        
+        # Обновляем статистику для пидора дня
+        update_user_stats(
+            pidor_user.id, 
+            pidor_user.username, 
+            pidor_user.first_name, 
+            pidor_user.last_name, 
+            'pidor'
+        )
+        
+        # Формируем результат
+        pidor_name = f"{pidor_user.first_name or ''}"
+        if pidor_user.last_name:
+            pidor_name += f" {pidor_user.last_name}"
+        if pidor_user.username:
+            pidor_name += f" (@{pidor_user.username})"
+        
+        # Формируем красивый ответ
+        response = "🎉 *ЕЖЕДНЕВНЫЕ ТИТУЛЫ* 🎉\n\n"
+        
+        # Пидор дня
+        response += f"🏆 *{TITLES['pidor']['title']}* 🏆\n"
+        response += f"{TITLES['pidor']['description']}\n"
+        response += f"🥇 {pidor_name}\n\n"
+        
+        # Любимчик дня
+        response += f"💖 *{TITLES['favorite']['title']}* 💖\n"
+        response += f"{TITLES['favorite']['description']}\n"
+        response += f"🥇 {favorite_name}\n\n"
+        
+        response += "🏆 Поздравляем победителей! 🏆"
+        
+        # Сохраняем результаты на сегодня
+        save_today_results(response)
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in assign_daily_titles: {e}")
+        await update.message.reply_text("Произошла ошибка при назначении титулов!")
+
+async def daily_titles_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для вызова ежедневных титулов"""
+    await assign_daily_titles(update, context)
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать статистику пидоров и любимчиков за неделю, месяц и все время"""
+    try:
+        response = "📊 *СТАТИСТИКА ТИТУЛОВ* 📊\n\n"
+        
+        for title_type, title_info in TITLES.items():
+            response += f"{title_info['emoji']} *{title_info['title']}* {title_info['emoji']}\n"
+            
+            # За неделю
+            week_stats = get_user_stats_period(title_type, 7)
+            response += "📅 *За неделю:*\n"
+            if week_stats:
+                for i, (username, first_name, last_name, count) in enumerate(week_stats[:3], 1):
+                    user_name = first_name or ""
+                    if last_name:
+                        user_name += f" {last_name}"
+                    if username:
+                        user_name += f" (@{username})"
+                    response += f"{i}. {user_name} - {count} раз(а)\n"
+            else:
+                response += "Нет данных\n"
+            
+            # За месяц
+            month_stats = get_user_stats_period(title_type, 30)
+            response += "📅 *За месяц:*\n"
+            if month_stats:
+                for i, (username, first_name, last_name, count) in enumerate(month_stats[:3], 1):
+                    user_name = first_name or ""
+                    if last_name:
+                        user_name += f" {last_name}"
+                    if username:
+                        user_name += f" (@{username})"
+                    response += f"{i}. {user_name} - {count} раз(а)\n"
+            else:
+                response += "Нет данных\n"
+            
+            # За все время
+            all_time_stats = get_all_time_stats(title_type)
+            response += "📅 *За все время:*\n"
+            if all_time_stats:
+                for i, (username, first_name, last_name, count) in enumerate(all_time_stats[:3], 1):
+                    user_name = first_name or ""
+                    if last_name:
+                        user_name += f" {last_name}"
+                    if username:
+                        user_name += f" (@{username})"
+                    response += f"{i}. {user_name} - {count} раз(а)\n"
+            else:
+                response += "Нет данных\n"
+            
+            response += "\n"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Error in stats_command: {e}")
         await update.message.reply_text("Произошла ошибка при получении статистики!")
 
-# Команда /taro
-async def taro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    prediction = random.choice(TARO)
-    await update.message.reply_text(f"🔮 Ваше предсказание на сегодня:\n{prediction}")
+async def tester_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Предсказание на день тестировщика (один раз на пользователя)"""
+    try:
+        user_id = update.effective_user.id
+        
+        if not can_user_get_prediction(user_id):
+            await update.message.reply_text("❌ Вы уже получали предсказание сегодня! Попробуйте завтра.")
+            return
+        
+        prediction = random.choice(TESTER_DAY_PREDICTIONS)
+        await update.message.reply_text(f"🧪 *День Тестировщика* 🧪\n\n{prediction}", parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in tester_day_command: {e}")
+        await update.message.reply_text("Произошла ошибка при получении предсказания!")
 
-# Триггер "пиздец"
-async def pizdec_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phrase = random.choice(PIZDEC_PHRASES)
-    await update.message.reply_text(phrase)
+async def external_api_response(prompt: str) -> str:
+    """Получает ответ от внешнего API через прокси"""
+    try:
+        # Ваш прокси URL
+        proxy_url = "https://generativelanguage.googleapis.com"
+        
+        async with aiohttp.ClientSession() as session:
+            # Формируем запрос к прокси
+            async with session.post(
+                f"{proxy_url}/v1beta/models/gemini-pro:generateContent",
+                headers={
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "contents": [{
+                        "parts": [{
+                            "text": prompt
+                        }]
+                    }]
+                }
+            ) as response:
+                
+                if response.status == 200:
+                    data = await response.json()
+                    # Извлекаем текст ответа из структуры Gemini API
+                    if data and 'candidates' in data and len(data['candidates']) > 0:
+                        return data['candidates'][0]['content']['parts'][0]['text']
+                    else:
+                        return "Не удалось получить ответ от API"
+                else:
+                    return f"Ошибка API: {response.status}"
+            
+    except Exception as e:
+        logger.error(f"Error calling external API: {e}")
+        return "Извините, API временно недоступен. Попробуйте позже."
 
-# Триггер "Ошибка"
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    meme = random.choice(ERROR_MEMES)
-    await update.message.reply_text(meme)
+# Триггеры для сообщений
+async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает триггеры в сообщениях"""
+    try:
+        message_text = update.message.text.lower()
+        user = update.message.from_user
+        
+        # Сохраняем реакции сообщения
+        await save_message_reaction(update, context)
+        
+        # Триггер: Катя/Екатерина + "пока"
+        if user.first_name and ('катя' in user.first_name.lower() or 'екатерина' in user.first_name.lower()):
+            if 'пока' in message_text:
+                await update.message.reply_text("Пока Кать! 👋")
+                return
+        
+        # Триггер: "да" -> "Пизда"
+        if message_text.strip() == 'да':
+            await update.message.reply_text("Пизда! 😏")
+            return
+        
+        # Триггер: "нет" -> "пидора ответ"
+        if message_text.strip() == 'нет':
+            await update.message.reply_text("пидора ответ! 🏳️‍🌈")
+            return
+        
+        # Триггер: "офис" -> ответ от внешнего API
+        if 'офис' in message_text:
+            ai_response = await external_api_response(f"Офис: {message_text}")
+            await update.message.reply_text(ai_response)
+            return
+            
+        # Триггер: "ошибка" -> грубый ответ
+        if 'ошибка' in message_text or 'error' in message_text:
+            rude_response = random.choice(RUDE_RESPONSES)
+            await update.message.reply_text(rude_response)
+            return
+            
+        # Триггер: "пиздец" -> грубый ответ
+        if 'пиздец' in message_text:
+            rude_response = random.choice(RUDE_RESPONSES)
+            await update.message.reply_text(rude_response)
+            return
+            
+    except Exception as e:
+        logger.error(f"Error in message_triggers: {e}")
 
-# Триггер "Катя/Екатерина + пока"
-async def katya_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.first_name and ('катя' in user.first_name.lower() or 'екатерина' in user.first_name.lower()):
-        if 'пока' in update.message.text.lower():
-            await update.message.reply_text("Пока Кать! 👋")
-
-# Главная функция
 def main():
     init_db()
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Команды
-    application.add_handler(CommandHandler("rainbow", rainbow_command))
+    application.add_handler(CommandHandler("daily", daily_titles_command))
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("taro", taro_command))
+    application.add_handler(CommandHandler("tester", tester_day_command))
     
-    # Триггеры
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)пиздец"), pizdec_handler))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)ошибка"), error_handler))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)пока"), katya_handler))
+    # Обработчик всех сообщений для триггеров и реакций
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_triggers))
     
     print("Бот запущен! Нажмите Ctrl+C для остановки")
     application.run_polling()
