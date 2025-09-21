@@ -3,12 +3,11 @@ import random
 import logging
 import sqlite3
 import datetime
-import aiohttp
 import asyncio
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Загружаем токен из файла
 load_dotenv()
@@ -416,43 +415,39 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in stats_command: {e}")
         await update.message.reply_text("Произошла ошибка при получении статистики!")
 
-
-
-async def external_api_response(prompt: str) -> str:
-    """Получает ответ от внешнего API через прокси"""
+async def tester_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для предсказания тестировщика дня"""
     try:
-        # Ваш прокси URL
-        proxy_url = "https://generativelanguage.googleapis.com"
+        user = update.message.from_user
         
-        async with aiohttp.ClientSession() as session:
-            # Формируем запрос к прокси
-            async with session.post(
-                f"{proxy_url}/v1beta/models/gemini-pro:generateContent",
-                headers={
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "contents": [{
-                        "parts": [{
-                            "text": prompt
-                        }]
-                    }]
-                }
-            ) as response:
-                
-                if response.status == 200:
-                    data = await response.json()
-                    # Извлекаем текст ответа из структуры Gemini API
-                    if data and 'candidates' in data and len(data['candidates']) > 0:
-                        return data['candidates'][0]['content']['parts'][0]['text']
-                    else:
-                        return "Не удалось получить ответ от API"
-                else:
-                    return f"Ошибка API: {response.status}"
-            
+        if not can_user_get_prediction(user.id):
+            await update.message.reply_text("Вы уже получали предсказание сегодня! Попробуйте завтра.")
+            return
+        
+        # Получаем участников чата
+        chat_id = update.effective_chat.id
+        members = await context.bot.get_chat_administrators(chat_id)
+        
+        # Выбираем случайного тестировщика
+        tester_users = get_random_users(members, 1)
+        tester_user = tester_users[0].user
+        
+        tester_name = f"{tester_user.first_name or ''}"
+        if tester_user.last_name:
+            tester_name += f" {tester_user.last_name}"
+        if tester_user.username:
+            tester_name += f" (@{tester_user.username})"
+        
+        response = f"🔮 *ПРЕДСКАЗАНИЕ ТЕСТИРОВЩИКА ДНЯ* 🔮\n\n"
+        response += f"Мой хрустальный шар говорит...\n"
+        response += f"Сегодняшний тестировщик дня: {tester_name}!\n\n"
+        response += "Пусть баги горят, а тесты проходят! 🐛🔥"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+        
     except Exception as e:
-        logger.error(f"Error calling external API: {e}")
-        return "Извините, API временно недоступен. Попробуйте позже."
+        logger.error(f"Error in tester_day_command: {e}")
+        await update.message.reply_text("Произошла ошибка при предсказании тестировщика дня!")
 
 # Триггеры для сообщений
 async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -478,12 +473,6 @@ async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Триггер: "нет" -> "пидора ответ"
         if message_text.strip() == 'нет':
             await update.message.reply_text("пидора ответ! 🏳️‍🌈")
-            return
-        
-        # Триггер: "офис" -> ответ от внешнего API
-        if 'офис' in message_text:
-            ai_response = await external_api_response(f"Офис: {message_text}")
-            await update.message.reply_text(ai_response)
             return
             
         # Триггер: "ошибка" -> грубый ответ
@@ -518,4 +507,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
