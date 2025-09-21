@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 GAY_JOKES = [
     "Как пидоры называют свой выходной? - День открытых дверей!",
     "Почему пидоры хорошие программисты? Потому что они любят обрабатывать исключения!",
-    "Что общего между пидором и пиццей? Оба любят, когда их укладываютют на стол!",
+    "Что общего между пидором и пиццей? Оба любят, когда их укладывают на стол!",
     "Почему пидоры не теряются в лесу? - Они всегда находят тропинку!",
     "Как пидор называет свой компьютер? - Мой верный компаньон!",
     "Почему пидоры любят базы данных? - Там можно найти много интересных связей!",
@@ -227,6 +227,8 @@ def get_all_time_stats(title_type):
 def get_random_users(chat_members, count=1):
     """Выбирает случайных пользователей из списка"""
     human_members = [m for m in chat_members if not m.user.is_bot]
+    if len(human_members) == 0:
+        return []
     return random.sample(human_members, min(count, len(human_members)))
 
 def get_top_user_by_reactions():
@@ -280,7 +282,7 @@ async def save_message_reaction(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Подсчитываем общее количество реакций
         reaction_count = 0
-        if message.reactions:
+        if hasattr(message, 'reactions') and message.reactions:
             for reaction in message.reactions:
                 reaction_count += reaction.count
         
@@ -318,7 +320,10 @@ async def get_chat_members(chat_id, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error getting chat members: {e}")
         # Если не получается получить всех участников, возвращаем админов как fallback
-        return await context.bot.get_chat_administrators(chat_id)
+        try:
+            return await context.bot.get_chat_administrators(chat_id)
+        except Exception:
+            return []
 
 async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Назначение Пидора Дня"""
@@ -333,6 +338,9 @@ async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Получаем всех участников чата
         members = await get_chat_members(chat_id, context)
+        if not members:
+            await update.message.reply_text("Не удалось получить участников чата!")
+            return
         
         # 1. Отправляем гей-шутку
         gay_joke = random.choice(GAY_JOKES)
@@ -343,6 +351,10 @@ async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # 3. Выбираем пидора дня
         pidor_users = get_random_users(members, 1)
+        if not pidor_users:
+            await update.message.reply_text("Нет подходящих пользователей для выбора!")
+            return
+            
         pidor_user = pidor_users[0].user
         
         # Обновляем статистику для пидора дня
@@ -388,6 +400,9 @@ async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Получаем всех участников чата
         members = await get_chat_members(chat_id, context)
+        if not members:
+            await update.message.reply_text("Не удалось получить участников чата!")
+            return
         
         # Выбираем любимчика дня (по реакциям)
         favorite_user_data = get_top_user_by_reactions()
@@ -395,6 +410,9 @@ async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Если нет данных о реакциях, выбираем случайного
         if not favorite_user_data:
             favorite_users = get_random_users(members, 1)
+            if not favorite_users:
+                await update.message.reply_text("Нет подходящих пользователей для выбора!")
+                return
             favorite_user = favorite_users[0].user
             favorite_name = f"{favorite_user.first_name or ''}"
             if favorite_user.last_name:
@@ -495,9 +513,16 @@ async def tester_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Получаем участников чата
         chat_id = update.effective_chat.id
         members = await get_chat_members(chat_id, context)
+        if not members:
+            await update.message.reply_text("Не удалось получить участников чата!")
+            return
         
         # Выбираем случайного тестировщика
         tester_users = get_random_users(members, 1)
+        if not tester_users:
+            await update.message.reply_text("Нет подходящих пользователей для выбора!")
+            return
+            
         tester_user = tester_users[0].user
         
         tester_name = f"{tester_user.first_name or ''}"
