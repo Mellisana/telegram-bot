@@ -49,22 +49,35 @@ RUDE_RESPONSES = [
     "Опять этот хуевый пиздец..."
 ]
 
-# Ответы на IT-триггеры (по 15+ для каждого)
+# Ответы на IT-триггеры
 IT_RESPONSES = {
     'офис': [
         "Офис? Это место где пидоры притворяются нормальными с 9 до 6! 🎭",
         "В офисе все знают, чей стул скрипит громче всех! 💺🔊",
+        "Офисный пидор всегда знает, где найти самый удобный стул! 💼",
+        "В офисе пидоры собираются у кулера, чтобы обсудить последние тренды! 💦"
     ],
     'ошибка': [
         "Это не баг, это фича! 🐛🏳️‍🌈",
         "Ошибка компиляции - пидор не может войти в программу! ⚠️",
+        "Ошибка 404: Пидор не найден в этом коде! 🔍",
+        "Runtime Error: Пидор пытался войти не в ту функцию! 🚫"
     ],
     'айос': [
         "iOS - операционка для пидоров которые любят когда за них все решают! 📱✨",
+        "iPhone пользователи - пидоры с золотыми цепями! 📱⛓️",
+        "iOS разработчик - пидор в позолоченной клетке! 🏢"
     ],
     'андроид': [
         "Android - для пидоров которые любят настраивать все под себя! 🤖🔧",
         "Android разработчики - пидоры в свободных отношениях с кодом! 💻",
+        "Android пользователь - пидор с возможностью кастомизации! 🎨",
+        "Пидор на Android может настроить все под свой вкус! 🌈"
+    ],
+    'баг': [
+        "Нашел баг? Значит ты хороший пидор-тестировщик! 🐛🔍",
+        "Баг - это просто фича, которую пидор еще не понял! 🐞",
+        "Каждому багу нужен свой пидор для исправления! 🛠️"
     ]
 }
 
@@ -74,7 +87,9 @@ TESTER_PREDICTIONS = [
     "Твои тест-кейсы будут безупречны, как костюм пидора на свадьбе! 👔✨",
     "Сегодня ты поймешь, что баг был не в коде, а в твоей душе! 💻❤️",
     "Сегодня ты станешь легендой среди пидоров-тестировщиков! 🏆🌟",
-    "Сегодня ты станешь героем для всех пидоров в отделе! 🦸‍♂️🏳️‍🌈"
+    "Сегодня ты станешь героем для всех пидоров в отделе! 🦸‍♂️🏳️‍🌈",
+    "Твои навыки тестирования сегодня поразиют даже самых опытных пидоров! 💫",
+    "Сегодня ты найдешь баг, который все искали! 🎯"
 ]
 
 # ТИТУЛЫ ДЛЯ ЕЖЕДНЕВНОГО ВЫБОРА
@@ -227,7 +242,7 @@ def get_all_time_stats(title_type):
 def get_random_users(chat_members, count=1):
     """Выбирает случайных пользователей из списка"""
     human_members = [m for m in chat_members if not m.user.is_bot]
-    if len(human_members) == 0:
+    if not human_members:
         return []
     return random.sample(human_members, min(count, len(human_members)))
 
@@ -278,7 +293,12 @@ async def save_message_reaction(update: Update, context: ContextTypes.DEFAULT_TY
     """Сохраняет информацию о сообщении и его реакциях"""
     try:
         message = update.message
+        if not message:
+            return
+            
         user = message.from_user
+        if not user:
+            return
         
         # Подсчитываем общее количество реакций
         reaction_count = 0
@@ -314,16 +334,32 @@ async def get_chat_members(chat_id, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Получаем список всех участников чата
         members = []
-        async for member in context.bot.get_chat_members(chat_id):
-            members.append(member)
+        
+        # Используем get_chat_member_count для получения общего количества
+        chat_member_count = await context.bot.get_chat_member_count(chat_id)
+        logger.info(f"Всего участников в чате: {chat_member_count}")
+        
+        # Пробуем получить участников через get_chat_administrators как fallback
+        try:
+            # Основной способ - через итерацию по участникам
+            async for member in context.bot.get_chat_members(chat_id):
+                members.append(member)
+            logger.info(f"Успешно получено участников через get_chat_members: {len(members)}")
+        except Exception as e:
+            logger.warning(f"Не удалось получить участников через get_chat_members: {e}")
+            # Fallback - получаем только администраторов
+            try:
+                admin_members = await context.bot.get_chat_administrators(chat_id)
+                members.extend(admin_members)
+                logger.info(f"Получено администраторов через fallback: {len(members)}")
+            except Exception as admin_error:
+                logger.error(f"Не удалось получить даже администраторов: {admin_error}")
+        
         return members
+        
     except Exception as e:
         logger.error(f"Error getting chat members: {e}")
-        # Если не получается получить всех участников, возвращаем админов как fallback
-        try:
-            return await context.bot.get_chat_administrators(chat_id)
-        except Exception:
-            return []
+        return []
 
 async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Назначение Пидора Дня"""
@@ -339,23 +375,30 @@ async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Получаем всех участников чата
         members = await get_chat_members(chat_id, context)
         if not members:
-            await update.message.reply_text("Не удалось получить участников чата!")
+            await update.message.reply_text("❌ Не удалось получить список участников чата! Убедитесь, что бот имеет права администратора.")
             return
+        
+        logger.info(f"Получено участников для выбора пидора: {len(members)}")
+        
+        # Фильтруем ботов и оставляем только людей
+        human_members = [m for m in members if not m.user.is_bot]
+        if not human_members:
+            await update.message.reply_text("❌ В чате нет подходящих участников (все боты?)!")
+            return
+            
+        logger.info(f"Человеческих участников после фильтрации: {len(human_members)}")
         
         # 1. Отправляем гей-шутку
         gay_joke = random.choice(GAY_JOKES)
         await update.message.reply_text(gay_joke)
+        await asyncio.sleep(1)
         
         # 2. Отправляем картинку барабана (эмодзи)
-        await update.message.reply_text("🥁 *Барабанная дробь...* 🥁", parse_mode='Markdown')
+        drum_msg = await update.message.reply_text("🥁 *Барабанная дробь...* 🥁", parse_mode='Markdown')
+        await asyncio.sleep(2)  # Пауза для драматизма
         
-        # 3. Выбираем пидора дня
-        pidor_users = get_random_users(members, 1)
-        if not pidor_users:
-            await update.message.reply_text("Нет подходящих пользователей для выбора!")
-            return
-            
-        pidor_user = pidor_users[0].user
+        # 3. Выбираем пидора дня из всех участников
+        pidor_user = random.choice(human_members).user
         
         # Обновляем статистику для пидора дня
         update_user_stats(
@@ -376,16 +419,17 @@ async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Формируем ответ
         response = f"🏆 *{TITLES['pidor']['title']}* 🏆\n"
         response += f"{TITLES['pidor']['description']}\n"
-        response += f"🥇 {pidor_name}"
+        response += f"🥇 {pidor_name}\n"
+        response += f"📊 Всего кандидатов: {len(human_members)}"
         
         # Сохраняем результаты на сегодня
         save_today_results(response)
         
-        await update.message.reply_text(response, parse_mode='Markdown')
+        await drum_msg.edit_text(response, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Error in assign_pidor_day: {e}")
-        await update.message.reply_text("Произошла ошибка при выборе пидора дня!")
+        await update.message.reply_text("❌ Произошла ошибка при выборе пидора дня!")
 
 async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Назначение Любимчика Дня"""
@@ -401,25 +445,36 @@ async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Получаем всех участников чата
         members = await get_chat_members(chat_id, context)
         if not members:
-            await update.message.reply_text("Не удалось получить участников чата!")
+            await update.message.reply_text("❌ Не удалось получить список участников чата!")
+            return
+        
+        # Фильтруем ботов
+        human_members = [m for m in members if not m.user.is_bot]
+        if not human_members:
+            await update.message.reply_text("❌ В чате нет подходящих участников!")
             return
         
         # Выбираем любимчика дня (по реакциям)
         favorite_user_data = get_top_user_by_reactions()
         
-        # Если нет данных о реакциях, выбираем случайного
+        # Если нет данных о реакциях, выбираем случайного из всех участников
         if not favorite_user_data:
-            favorite_users = get_random_users(members, 1)
-            if not favorite_users:
-                await update.message.reply_text("Нет подходящих пользователей для выбора!")
-                return
-            favorite_user = favorite_users[0].user
+            favorite_user = random.choice(human_members).user
             favorite_name = f"{favorite_user.first_name or ''}"
             if favorite_user.last_name:
                 favorite_name += f" {favorite_user.last_name}"
             if favorite_user.username:
                 favorite_name += f" (@{favorite_user.username})"
             favorite_name += " (выбран случайно)"
+            
+            # Обновляем статистику
+            update_user_stats(
+                favorite_user.id,
+                favorite_user.username,
+                favorite_user.first_name,
+                favorite_user.last_name,
+                'favorite'
+            )
         else:
             user_id, username, first_name, last_name, total_reactions = favorite_user_data
             favorite_name = f"{first_name or ''}"
@@ -428,11 +483,15 @@ async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE
             if username:
                 favorite_name += f" (@{username})"
             favorite_name += f" - {total_reactions} реакций"
+            
+            # Обновляем статистику
+            update_user_stats(user_id, username, first_name, last_name, 'favorite')
         
         # Формируем ответ
         response = f"💖 *{TITLES['favorite']['title']}* 💖\n"
         response += f"{TITLES['favorite']['description']}\n"
-        response += f"🥇 {favorite_name}"
+        response += f"🥇 {favorite_name}\n"
+        response += f"📊 Всего кандидатов: {len(human_members)}"
         
         # Сохраняем результаты на сегодня
         save_today_results(response)
@@ -441,7 +500,7 @@ async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     except Exception as e:
         logger.error(f"Error in assign_favorite_day: {e}")
-        await update.message.reply_text("Произошла ошибка при выборе любимчика дня!")
+        await update.message.reply_text("❌ Произошла ошибка при выборе любимчика дня!")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать статистику пидоров и любимчиков за неделю, месяц и все время"""
@@ -499,7 +558,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Error in stats_command: {e}")
-        await update.message.reply_text("Произошла ошибка при получении статистики!")
+        await update.message.reply_text("❌ Произошла ошибка при получении статистики!")
 
 async def tester_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для предсказания тестировщика дня"""
@@ -507,23 +566,25 @@ async def tester_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user = update.message.from_user
         
         if not can_user_get_prediction(user.id):
-            await update.message.reply_text("Вы уже получали предсказание сегодня! Попробуйте завтра.")
+            await update.message.reply_text("❌ Вы уже получали предсказание сегодня! Попробуйте завтра.")
             return
         
         # Получаем участников чата
         chat_id = update.effective_chat.id
         members = await get_chat_members(chat_id, context)
+        
         if not members:
-            await update.message.reply_text("Не удалось получить участников чата!")
+            await update.message.reply_text("❌ Не удалось получить список участников чата!")
             return
         
-        # Выбираем случайного тестировщика
-        tester_users = get_random_users(members, 1)
-        if not tester_users:
-            await update.message.reply_text("Нет подходящих пользователей для выбора!")
+        # Фильтруем ботов
+        human_members = [m for m in members if not m.user.is_bot]
+        if not human_members:
+            await update.message.reply_text("❌ В чате нет подходящих участников!")
             return
-            
-        tester_user = tester_users[0].user
+        
+        # Выбираем случайного тестировщика из всех участников
+        tester_user = random.choice(human_members).user
         
         tester_name = f"{tester_user.first_name or ''}"
         if tester_user.last_name:
@@ -538,18 +599,78 @@ async def tester_day_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         response += f"Мой хрустальный шар говорит...\n"
         response += f"Сегодняшний тестировщик дня: {tester_name}!\n\n"
         response += f"*Предсказание:* {prediction}\n\n"
+        response += f"📊 Всего кандидатов: {len(human_members)}\n"
         response += "Пусть баги горят, а тесты проходят! 🐛🔥"
         
         await update.message.reply_text(response, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Error in tester_day_command: {e}")
-        await update.message.reply_text("Произошла ошибка при предсказании тестировщика дня!")
+        await update.message.reply_text("❌ Произошла ошибка при предсказании тестировщика дня!")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда помощи"""
+    help_text = """
+🤖 *Доступные команды:*
+
+/pidor - Выбрать пидора дня 🏆
+/favorite - Выбрать любимчика дня 💖  
+/stats - Показать статистику 📊
+/tester - Предсказание тестировщика дня 🔮
+/help - Показать эту справку ❓
+
+💬 *Триггеры в сообщениях:*
+- "да" → "Пизда!"
+- "нет" → "пидора ответ!"
+- IT-слова (офис, ошибка, айос, андроид, баг)
+- "пиздец" → случайный грубый ответ
+
+⚠️ *Для работы бота нужны права администратора!*
+    """
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для отладки - показать участников чата"""
+    try:
+        chat_id = update.effective_chat.id
+        members = await get_chat_members(chat_id, context)
+        
+        if not members:
+            await update.message.reply_text("❌ Не удалось получить список участников!")
+            return
+        
+        human_members = [m for m in members if not m.user.is_bot]
+        
+        response = f"👥 *ИНФОРМАЦИЯ О ЧАТЕ* 👥\n\n"
+        response += f"Всего участников: {len(members)}\n"
+        response += f"Людей (не ботов): {len(human_members)}\n\n"
+        response += f"*Список участников:*\n"
+        
+        for i, member in enumerate(human_members[:10], 1):  # Показываем первых 10
+            user = member.user
+            name = f"{user.first_name or ''}"
+            if user.last_name:
+                name += f" {user.last_name}"
+            if user.username:
+                name += f" (@{user.username})"
+            response += f"{i}. {name}\n"
+        
+        if len(human_members) > 10:
+            response += f"\n... и еще {len(human_members) - 10} участников"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in members_command: {e}")
+        await update.message.reply_text("❌ Ошибка при получении информации о чате")
 
 # Триггеры для сообщений
 async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает триггеры в сообщениях"""
     try:
+        if not update.message or not update.message.text:
+            return
+            
         message_text = update.message.text.lower()
         user = update.message.from_user
         
@@ -585,7 +706,7 @@ async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         # IT-триггеры
-        for trigger_word in ['офис', 'айос', 'андроид']:
+        for trigger_word in ['офис', 'айос', 'андроид', 'баг']:
             if trigger_word in message_text:
                 it_response = random.choice(IT_RESPONSES[trigger_word])
                 await update.message.reply_text(it_response)
@@ -595,7 +716,10 @@ async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in message_triggers: {e}")
 
 def main():
+    # Инициализация базы данных
     init_db()
+    
+    # Создание приложения
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Команды
@@ -603,12 +727,20 @@ def main():
     application.add_handler(CommandHandler("favorite", assign_favorite_day))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("tester", tester_day_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("start", help_command))
+    application.add_handler(CommandHandler("members", members_command))  # Для отладки
     
     # Обработчик всех сообщений для триггеров и реакций
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_triggers))
     
     print("Бот запущен! Нажмите Ctrl+C для остановки")
-    application.run_polling()
+    
+    # Запуск бота
+    try:
+        application.run_polling()
+    except Exception as e:
+        logger.error(f"Error running bot: {e}")
 
 if __name__ == "__main__":
     main()
