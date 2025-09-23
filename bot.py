@@ -232,7 +232,7 @@ def get_random_users(chat_members, count=1):
     return random.sample(human_members, min(count, len(human_members)))
 
 def get_top_user_by_reactions():
-    """Получает пользователя с наибольшим количеством реакций"""
+    """Получает пользователя с наибольшим количеством реакций за сегодня"""
     conn = sqlite3.connect('daily_titles.db')
     cursor = conn.cursor()
     
@@ -263,23 +263,15 @@ async def save_message_reaction(update: Update, context: ContextTypes.DEFAULT_TY
         if not user:
             return
         
-        # Подсчитываем общее количество реакций
-        reaction_count = 0
+        # Базовый счетчик реакций (можно расширить логикой подсчета реальных реакций)
+        reaction_count = 1  # Каждое сообщение получает минимум 1 "реакцию"
         
-        # Проверяем наличие реакций (новый способ в python-telegram-bot)
-        if hasattr(message, 'effect_id') or (hasattr(message, 'reactions') and message.reactions):
-            # Если есть реакции, считаем их
-            if hasattr(message, 'reactions') and message.reactions:
-                for reaction in message.reactions:
-                    reaction_count += reaction.count
-            else:
-                # Альтернативный способ - если сообщение получило много ответов/лайков
-                # Можно добавить логику для подсчета ответов на сообщение
-                pass
-        
-        # Также учитываем replies как реакции
+        # Дополнительные реакции за replies
         if message.reply_to_message:
-            reaction_count += 1
+            reaction_count += 2  # Ответ на сообщение = +2 реакции
+        
+        # Логируем для отладки
+        logger.info(f"Сообщение от {user.first_name}: reactions_count = {reaction_count}")
         
         conn = sqlite3.connect('daily_titles.db')
         cursor = conn.cursor()
@@ -301,36 +293,29 @@ async def save_message_reaction(update: Update, context: ContextTypes.DEFAULT_TY
         conn.commit()
         conn.close()
         
-        logger.info(f"Сохранены реакции для пользователя {user.first_name}: {reaction_count}")
-        
     except Exception as e:
         logger.error(f"Error saving message reaction: {e}")
 
-async def get_chat_members(chat_id, context: ContextTypes.DEFAULT_TYPE):
-    """Получает всех участников чата (не только админов)"""
+async def get_all_chat_members(chat_id, context: ContextTypes.DEFAULT_TYPE):
+    """Получает ВСЕХ участников чата (используем администраторов как fallback)"""
     try:
-        # Получаем список всех участников чата
         members = []
         
-        # Используем get_chat_member_count для получения общего количества
-        chat_member_count = await context.bot.get_chat_member_count(chat_id)
-        logger.info(f"Всего участников в чате: {chat_member_count}")
-        
-        # Пробуем получить участников через get_chat_administrators как fallback
+        # Пытаемся получить всех участников чата
         try:
-            # Основной способ - через итерацию по участникам
             async for member in context.bot.get_chat_members(chat_id):
                 members.append(member)
-            logger.info(f"Успешно получено участников через get_chat_members: {len(members)}")
+            logger.info(f"✅ Успешно получено всех участников: {len(members)}")
         except Exception as e:
-            logger.warning(f"Не удалось получить участников через get_chat_members: {e}")
-            # Fallback - получаем только администраторов
+            logger.warning(f"Не удалось получить всех участников: {e}")
+            # Fallback - получаем администраторов
             try:
                 admin_members = await context.bot.get_chat_administrators(chat_id)
                 members.extend(admin_members)
-                logger.info(f"Получено администраторов через fallback: {len(members)}")
+                logger.info(f"✅ Получено администраторов: {len(members)}")
             except Exception as admin_error:
-                logger.error(f"Не удалось получить даже администраторов: {admin_error}")
+                logger.error(f"❌ Не удалось получить даже администраторов: {admin_error}")
+                return []
         
         return members
         
@@ -349,8 +334,8 @@ async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📅 Пидор дня уже был выбран сегодня!")
             return
         
-        # Получаем всех участников чата
-        members = await get_chat_members(chat_id, context)
+        # Получаем ВСЕХ участников чата
+        members = await get_all_chat_members(chat_id, context)
         if not members:
             await update.message.reply_text("❌ Не удалось получить список участников чата! Убедитесь, что бот имеет права администратора.")
             return
@@ -374,7 +359,7 @@ async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
         drum_msg = await update.message.reply_text("🥁 *Барабанная дробь...* 🥁", parse_mode='Markdown')
         await asyncio.sleep(2)  # Пауза для драматизма
         
-        # 3. Выбираем пидора дня из всех участников
+        # 3. Выбираем пидора дня из ВСЕХ участников
         pidor_user = random.choice(human_members).user
         
         # Обновляем статистику для пидора дня
@@ -394,8 +379,8 @@ async def assign_pidor_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pidor_name += f" (@{pidor_user.username})"
         
         # Формируем ответ
-        response = f"🏆 *{TITLES['pidor']['title']}* 🏆\n"
-        response += f"{TITLES['pidor']['description']}\n"
+        response = f"🏆 *Пидор Дня* 🏆\n"
+        response += f"Самый везучий неудачник чата!\n"
         response += f"🥇 {pidor_name}\n"
         response += f"📊 Всего кандидатов: {len(human_members)}"
         
@@ -419,8 +404,8 @@ async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("📅 Любимчик дня уже был выбран сегодня!")
             return
         
-        # Получаем всех участников чата
-        members = await get_chat_members(chat_id, context)
+        # Получаем ВСЕХ участников чата
+        members = await get_all_chat_members(chat_id, context)
         if not members:
             await update.message.reply_text("❌ Не удалось получить список участников чата!")
             return
@@ -431,7 +416,7 @@ async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ В чате нет подходящих участников!")
             return
         
-        # Выбираем любимчика дня (по реакциям)
+        # Выбираем любимчика дня (по реакциям из ВСЕХ сообщений за день)
         favorite_user_data = get_top_user_by_reactions()
         
         # Если нет данных о реакциях, выбираем случайного из всех участников
@@ -465,8 +450,8 @@ async def assign_favorite_day(update: Update, context: ContextTypes.DEFAULT_TYPE
             update_user_stats(user_id, username, first_name, last_name, 'favorite')
         
         # Формируем ответ
-        response = f"💖 *{TITLES['favorite']['title']}* 💖\n"
-        response += f"{TITLES['favorite']['description']}\n"
+        response = f"💖 *Любимчик Дня* 💖\n"
+        response += f"Чьи сообщения собрали больше всего реакций!\n"
         response += f"🥇 {favorite_name}\n"
         response += f"📊 Всего кандидатов: {len(human_members)}"
         
@@ -561,7 +546,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для отладки - показать участников чата"""
     try:
         chat_id = update.effective_chat.id
-        members = await get_chat_members(chat_id, context)
+        members = await get_all_chat_members(chat_id, context)
         
         if not members:
             await update.message.reply_text("❌ Не удалось получить список участников!")
@@ -574,7 +559,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"Людей (не ботов): {len(human_members)}\n\n"
         response += f"*Список участников:*\n"
         
-        for i, member in enumerate(human_members[:10], 1):  # Показываем первых 10
+        for i, member in enumerate(human_members[:15], 1):  # Показываем первых 15
             user = member.user
             name = f"{user.first_name or ''}"
             if user.last_name:
@@ -583,8 +568,8 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 name += f" (@{user.username})"
             response += f"{i}. {name}\n"
         
-        if len(human_members) > 10:
-            response += f"\n... и еще {len(human_members) - 10} участников"
+        if len(human_members) > 15:
+            response += f"\n... и еще {len(human_members) - 15} участников"
         
         await update.message.reply_text(response, parse_mode='Markdown')
         
@@ -594,7 +579,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Триггеры для сообщений
 async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает триггеры в сообщениях"""
+    """Обрабатывает триггеры в сообщениях (независимо от регистра)"""
     try:
         if not update.message or not update.message.text:
             return
@@ -604,26 +589,27 @@ async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         logger.info(f"Получено сообщение от {user.first_name}: {message_text}")
         
-        # Сохраняем реакции сообщения
+        # Сохраняем реакции сообщения (для любимчика дня)
         await save_message_reaction(update, context)
         
-        # Триггер: Катя/Екатерина + "пока"
-        if user.first_name and ('катя' in user.first_name.lower() or 'екатерина' in user.first_name.lower()):
-            if 'пока' in message_text:
+        # Триггер: Катя/Екатерина + "пока" (независимо от регистра)
+        if user.first_name:
+            user_name_lower = user.first_name.lower()
+            if ('катя' in user_name_lower or 'екатерина' in user_name_lower) and 'пока' in message_text:
                 await update.message.reply_text("Пока Кать! 👋")
                 return
         
-        # Триггер: "да" -> "Пизда"
+        # Триггер: "да" -> "Пизда" (точное совпадение)
         if message_text.strip() == 'да':
             await update.message.reply_text("Пизда! 😏")
             return
         
-        # Триггер: "нет" -> "пидора ответ"
+        # Триггер: "нет" -> "пидора ответ" (точное совпадение)
         if message_text.strip() == 'нет':
             await update.message.reply_text("пидора ответ! 🏳️‍🌈")
             return
             
-        # Триггер: "ошибка" -> IT ответ
+        # Триггер: "ошибка" или "error" -> IT ответ
         if 'ошибка' in message_text or 'error' in message_text:
             it_response = random.choice(IT_RESPONSES['ошибка'])
             await update.message.reply_text(it_response)
@@ -635,23 +621,16 @@ async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(rude_response)
             return
             
-        # IT-триггеры - проверяем каждое слово отдельно
-        words = message_text.split()
+        # IT-триггеры - проверяем каждое слово отдельно (независимо от регистра)
+        words = message_text.lower().split()
         for word in words:
             # Очищаем слово от знаков препинания
-            clean_word = word.strip().lower().rstrip('.,!?;:')
+            clean_word = word.strip().rstrip('.,!?;:')
             
-            if clean_word in ['офис', 'ошибка', 'айос', 'андроид', 'баг', 'кулик', 'сережа']:
-                if clean_word in IT_RESPONSES:
-                    it_response = random.choice(IT_RESPONSES[clean_word])
-                    await update.message.reply_text(it_response)
-                    return
-                elif clean_word == 'кулик':
-                    it_response = random.choice(IT_RESPONSES['кулик'])
-                    await update.message.reply_text(it_response)
-                    return
-                elif clean_word == 'сережа':
-                    it_response = random.choice(IT_RESPONSES['сережа'])
+            # Проверяем все возможные триггеры
+            for trigger in ['офис', 'ошибка', 'айос', 'андроид', 'баг', 'кулик', 'сережа']:
+                if trigger in clean_word:
+                    it_response = random.choice(IT_RESPONSES.get(trigger, ["Нет ответа для этого триггера"]))
                     await update.message.reply_text(it_response)
                     return
                 
@@ -671,7 +650,7 @@ def main():
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("start", help_command))
-    application.add_handler(CommandHandler("members", members_command))  # Для отладки
+    application.add_handler(CommandHandler("members", members_command))
     
     # Обработчик всех сообщений для триггеров и реакций
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_triggers))
