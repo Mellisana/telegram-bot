@@ -76,11 +76,11 @@ IT_RESPONSES = {
         "Баг - это просто фича, которую пидор еще не понял! 🐞",
         "Каждому багу нужен свой пидор для исправления! 🛠️"
     ],
-    'Кулик': [
+    'кулик': [
         "Не произноси это имя вслух",
         "Что он тебе сделаль??",
     ],
-    'Сережа': [
+    'сережа': [
         "не Серёжа, а СерГЕЙ",
     ]
 }
@@ -265,9 +265,21 @@ async def save_message_reaction(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Подсчитываем общее количество реакций
         reaction_count = 0
-        if hasattr(message, 'reactions') and message.reactions:
-            for reaction in message.reactions:
-                reaction_count += reaction.count
+        
+        # Проверяем наличие реакций (новый способ в python-telegram-bot)
+        if hasattr(message, 'effect_id') or (hasattr(message, 'reactions') and message.reactions):
+            # Если есть реакции, считаем их
+            if hasattr(message, 'reactions') and message.reactions:
+                for reaction in message.reactions:
+                    reaction_count += reaction.count
+            else:
+                # Альтернативный способ - если сообщение получило много ответов/лайков
+                # Можно добавить логику для подсчета ответов на сообщение
+                pass
+        
+        # Также учитываем replies как реакции
+        if message.reply_to_message:
+            reaction_count += 1
         
         conn = sqlite3.connect('daily_titles.db')
         cursor = conn.cursor()
@@ -288,6 +300,8 @@ async def save_message_reaction(update: Update, context: ContextTypes.DEFAULT_TY
         
         conn.commit()
         conn.close()
+        
+        logger.info(f"Сохранены реакции для пользователя {user.first_name}: {reaction_count}")
         
     except Exception as e:
         logger.error(f"Error saving message reaction: {e}")
@@ -536,7 +550,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💬 *Триггеры в сообщениях:*
 - "да" → "Пизда!"
 - "нет" → "пидора ответ!"
-- IT-слова (офис, ошибка, айос, андроид, баг, Кулик, Сережа)
+- IT-слова (офис, ошибка, айос, андроид, баг, кулик, сережа)
 - "пиздец" → случайный грубый ответ
 
 ⚠️ *Для работы бота нужны права администратора!*
@@ -588,6 +602,8 @@ async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_text = update.message.text.lower()
         user = update.message.from_user
         
+        logger.info(f"Получено сообщение от {user.first_name}: {message_text}")
+        
         # Сохраняем реакции сообщения
         await save_message_reaction(update, context)
         
@@ -619,12 +635,25 @@ async def message_triggers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(rude_response)
             return
             
-        # IT-триггеры
-        for trigger_word in ['офис', 'айос', 'андроид', 'баг', 'кулик', 'сережа']:
-            if trigger_word in message_text:
-                it_response = random.choice(IT_RESPONSES.get(trigger_word.capitalize(), IT_RESPONSES.get(trigger_word, ["Нет ответа для этого триггера"])))
-                await update.message.reply_text(it_response)
-                return
+        # IT-триггеры - проверяем каждое слово отдельно
+        words = message_text.split()
+        for word in words:
+            # Очищаем слово от знаков препинания
+            clean_word = word.strip().lower().rstrip('.,!?;:')
+            
+            if clean_word in ['офис', 'ошибка', 'айос', 'андроид', 'баг', 'кулик', 'сережа']:
+                if clean_word in IT_RESPONSES:
+                    it_response = random.choice(IT_RESPONSES[clean_word])
+                    await update.message.reply_text(it_response)
+                    return
+                elif clean_word == 'кулик':
+                    it_response = random.choice(IT_RESPONSES['кулик'])
+                    await update.message.reply_text(it_response)
+                    return
+                elif clean_word == 'сережа':
+                    it_response = random.choice(IT_RESPONSES['сережа'])
+                    await update.message.reply_text(it_response)
+                    return
                 
     except Exception as e:
         logger.error(f"Error in message_triggers: {e}")
